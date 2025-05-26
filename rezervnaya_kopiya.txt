@@ -1,0 +1,431 @@
+
+=== ТЕХНИЧЕСКОЕ ЗАДАНИЕ ===
+
+Проект: Telegram-бот для записи в салон красоты
+Цель: автоматизация взаимодействия с клиентами, мастерами и администратором
+
+Функционал:
+- Клиент:
+  - /start — меню
+  - Запись на услугу (FSM)
+  - Оставить отзыв (FSM)
+  - Написать мастеру (чат)
+
+- Мастер:
+  - Просмотр записей
+  - Ответы в чате
+  - Просмотр отзывов
+
+- Админ:
+  - Доступ по ADMIN_ID
+  - Панель с меню, статистикой, рассылкой
+
+- Техническая реализация:
+  - aiogram, FSM, SQLite + SQLAlchemy
+  - run.py — автоинициализация базы и запуск
+  - .env: BOT_TOKEN, ADMIN_ID
+  - handlers: booking, feedback, chat, admin_menu, master_menu
+  - states.py — состояния FSM
+  - models.py — таблицы User, Booking, Feedback
+  - test_logic.py, test_load.py — тестирование
+  - rezervnaya_kopiya.txt — текущий файл с кодом и описанием
+
+=== СТРУКТУРА ПРОЕКТА ===
+
+beauty_salon_bot_final/
+├── run.py
+├── .env
+├── rezervnaya_kopiya.txt
+├── requirements.txt
+├── bot/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── db.py
+│   ├── main.py
+│   ├── init_db.py
+│   ├── models.py
+│   ├── states.py
+│   ├── backup.py
+│   ├── handlers/
+│   │   ├── __init__.py
+│   │   ├── booking.py
+│   │   ├── feedback.py
+│   │   ├── chat.py
+│   │   ├── admin_menu.py
+│   │   ├── master_menu.py
+├── tests/
+│   ├── test_logic.py
+│   ├── test_load.py
+
+=== ИСХОДНЫЙ КОД ===
+
+
+--- run.py ---
+
+import os
+import subprocess
+
+from bot.backup import make_backup
+
+DB_PATH = 'db.sqlite3'
+
+if not os.path.exists(DB_PATH):
+    print("[INIT] База данных не найдена, создаём...")
+    subprocess.run(["python", "bot/init_db.py"], check=True)
+else:
+    make_backup()
+
+print("[RUN] Запуск бота...")
+subprocess.run(["python", "-m", "bot.main"], check=True)
+
+
+
+--- backup.py ---
+# Резервное копирование БД
+
+
+
+--- healthcheck.py ---
+import requests
+print(requests.get('https://api.telegram.org/bot' + 'TOKEN' + '/getMe').json())
+
+
+
+--- bot/__init__.py ---
+
+
+
+
+--- bot/config.py ---
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+DB_PATH = 'db.sqlite3'
+BACKUP_PATH = 'backup/'
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
+
+
+
+--- bot/db.py ---
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from bot.config import DB_PATH
+engine = create_engine(f'sqlite:///{DB_PATH}')
+SessionLocal = sessionmaker(bind=engine)
+
+
+
+--- bot/init_db.py ---
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+from sqlalchemy import Column, Integer, String, BigInteger
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False)
+    name = Column(String)
+    role = Column(String, default='client')
+
+engine = create_engine('sqlite:///db.sqlite3')
+print("[INIT] Создание таблиц...")
+Base.metadata.create_all(bind=engine)
+
+
+
+--- bot/main.py ---
+
+import asyncio
+import logging
+import importlib
+from aiogram import Bot, Dispatcher
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+
+from bot.config import BOT_TOKEN
+
+dp = Dispatcher(storage=MemoryStorage())
+
+modules = ["booking", "feedback", "chat", "admin_menu", "master_menu"]
+for name in modules:
+    mod = importlib.import_module(f"bot.handlers.{name}")
+    dp.include_router(mod.router)
+
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+    await dp.start_polling(bot)
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
+
+
+--- bot/states.py ---
+from aiogram.fsm.state import StatesGroup, State
+
+class BookingStates(StatesGroup):
+    service = State()
+    master = State()
+    time = State()
+
+class FeedbackStates(StatesGroup):
+    rating = State()
+    comment = State()
+
+class ChatStates(StatesGroup):
+    message = State()
+
+
+
+--- bot/utils.py ---
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+def back_button():
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='⬅️ Назад', callback_data='back')]])
+
+
+
+--- bot/backup.py ---
+
+import os
+import shutil
+from datetime import datetime
+from bot.config import DB_PATH
+
+def make_backup():
+    os.makedirs("backup", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = f"backup/backup_{timestamp}.sqlite3"
+    shutil.copy(DB_PATH, backup_name)
+    print(f"[BACKUP] Резервная копия создана: {backup_name}")
+
+
+
+--- bot/handlers/__init__.py ---
+# handlers package
+
+
+--- bot/handlers/booking.py ---
+
+from aiogram import Router, F
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.fsm.context import FSMContext
+from bot.states import BookingStates
+
+router = Router()
+
+@router.message(F.text == "/start")
+async def start_handler(message: Message):
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📝 Записаться")],
+            [KeyboardButton(text="⭐ Оставить отзыв")],
+            [KeyboardButton(text="💬 Написать мастеру")],
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("Добро пожаловать! Выберите действие:", reply_markup=keyboard)
+
+@router.message(F.text == "📝 Записаться")
+async def start_booking(message: Message, state: FSMContext):
+    await message.answer("Введите желаемую услугу:")
+    await state.set_state(BookingStates.service)
+
+@router.message(BookingStates.service)
+async def choose_service(message: Message, state: FSMContext):
+    await state.update_data(service=message.text)
+    await message.answer("Введите имя мастера:")
+    await state.set_state(BookingStates.master)
+
+@router.message(BookingStates.master)
+async def choose_master(message: Message, state: FSMContext):
+    await state.update_data(master=message.text)
+    await message.answer("Введите дату и время (например, 2025-06-01 14:00):")
+    await state.set_state(BookingStates.time)
+
+@router.message(BookingStates.time)
+async def confirm_booking(message: Message, state: FSMContext):
+    await state.update_data(time=message.text)
+    data = await state.get_data()
+    await message.answer(
+        f"Вы записаны на услугу: {data['service']}\n"
+        f"К мастеру: {data['master']}\n"
+        f"На время: {data['time']}\n"
+        "Спасибо!"
+    )
+    await state.clear()
+
+
+
+--- bot/handlers/chat.py ---
+
+from aiogram import Router, F
+from aiogram.types import Message
+
+router = Router()
+
+@router.message(F.text == "💬 Написать мастеру")
+async def write_to_master(message: Message):
+    await message.answer("Пока чат с мастером реализуется. Ожидайте.")
+
+
+
+--- bot/handlers/feedback.py ---
+
+from aiogram import Router, F
+from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from bot.states import FeedbackStates
+
+router = Router()
+
+@router.message(F.text == "⭐ Оставить отзыв")
+async def start_feedback(message: Message, state: FSMContext):
+    await message.answer("Поставьте оценку от 1 до 5:")
+    await state.set_state(FeedbackStates.rating)
+
+@router.message(FeedbackStates.rating)
+async def get_rating(message: Message, state: FSMContext):
+    await state.update_data(rating=message.text)
+    await message.answer("Теперь оставьте комментарий:")
+    await state.set_state(FeedbackStates.comment)
+
+@router.message(FeedbackStates.comment)
+async def save_feedback(message: Message, state: FSMContext):
+    data = await state.get_data()
+    await message.answer(f"Спасибо за отзыв!\nОценка: {data['rating']}\nКомментарий: {message.text}")
+    await state.clear()
+
+
+
+--- bot/handlers/admin_menu.py ---
+
+from aiogram import Router, F
+from aiogram.types import Message
+from bot.config import ADMIN_ID
+
+router = Router()
+
+@router.message(F.text == "/admin")
+async def admin_start(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.answer("Доступ запрещён.")
+    await message.answer("Админ-панель: статистика, рассылка, управление (в разработке)")
+
+
+
+--- bot/handlers/master_menu.py ---
+
+from aiogram import Router, F
+from aiogram.types import Message
+from bot.models import Booking, User
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+router = Router()
+
+engine = create_engine("sqlite:///db.sqlite3")
+Session = sessionmaker(bind=engine)
+
+@router.message(F.text == "/master")
+async def master_panel(message: Message):
+    session = Session()
+    master = session.query(User).filter(User.telegram_id == message.from_user.id, User.role == 'master').first()
+    if not master:
+        await message.answer("Вы не зарегистрированы как мастер.")
+        return
+
+    bookings = session.query(Booking).filter(Booking.master_id == master.id).all()
+    if not bookings:
+        await message.answer("У вас пока нет записей.")
+    else:
+        text = "\n".join([f"{b.time} — клиент {b.client_id}" for b in bookings])
+        await message.answer(f"Ваши записи:\n{text}")
+
+
+
+--- tests/test_models.py ---
+# Проверка создания User, Booking
+
+
+
+--- tests/test_feedback.py ---
+# Проверка FSM отзыва
+
+
+
+--- tests/test_logic.py ---
+
+import unittest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from bot.models import Base, User, Booking, Feedback
+
+class LogicTestCase(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(self.engine)
+        self.Session = sessionmaker(bind=self.engine)
+        self.session = self.Session()
+
+        self.user = User(telegram_id=12345, name='Test User', role='client')
+        self.master = User(telegram_id=54321, name='Test Master', role='master')
+        self.session.add_all([self.user, self.master])
+        self.session.commit()
+
+    def test_booking_creation(self):
+        booking = Booking(client_id=self.user.id, master_id=self.master.id, time='2025-06-01 10:00')
+        self.session.add(booking)
+        self.session.commit()
+        self.assertEqual(self.session.query(Booking).count(), 1)
+        self.assertEqual(booking.client_id, self.user.id)
+
+    def test_feedback_creation(self):
+        feedback = Feedback(client_id=self.user.id, rating=5, comment='Great!')
+        self.session.add(feedback)
+        self.session.commit()
+        self.assertEqual(self.session.query(Feedback).count(), 1)
+        self.assertEqual(feedback.rating, 5)
+
+    def tearDown(self):
+        self.session.close()
+        self.engine.dispose()
+
+if __name__ == '__main__':
+    unittest.main()
+
+
+
+--- tests/test_load.py ---
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from bot.models import Base, User, Booking, Feedback
+
+engine = create_engine("sqlite:///:memory:")
+Base.metadata.create_all(bind=engine)
+Session = sessionmaker(bind=engine)
+session = Session()
+
+client = User(telegram_id=111, name="LoadTester", role="client")
+master = User(telegram_id=222, name="MasterBot", role="master")
+session.add_all([client, master])
+session.commit()
+
+for i in range(500):
+    booking = Booking(client_id=client.id, master_id=master.id, time=f"2025-06-01 10:{i % 60:02d}")
+    feedback = Feedback(client_id=client.id, rating=(i % 5) + 1, comment=f"Review {i}")
+    session.add(booking)
+    session.add(feedback)
+
+session.commit()
+
+print("🎯 Записей:", session.query(Booking).count())
+print("💬 Отзывов:", session.query(Feedback).count())

@@ -1,0 +1,4 @@
+aiogram==3.4.1
+sqlalchemy==2.0.30
+requests
+python-dotenv
